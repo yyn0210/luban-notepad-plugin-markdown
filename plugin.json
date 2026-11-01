@@ -1,0 +1,52 @@
+{
+  "id": "io.github.yyn0210.markdown-preview",
+  "name": "Markdown Preview",
+  "version": "1.0.0",
+  "api_version": 1,
+  "main": "main.lua",
+  "description": "Rendered Markdown preview in a side panel: GFM tables, task lists, quotes and syntax-highlighted code blocks.",
+  "author": "yyn0210",
+  "permissions": [],
+  "activate": "activate",
+  "contributes": {
+    "commands": [
+      {
+        "id": "markdown.preview",
+        "label": "Markdown: Preview",
+        "description": "Open or refresh the rendered Markdown preview",
+        "entry": "open_preview",
+        "default_keybinding": "ctrl+shift+v",
+        "when": "edit_text"
+      }
+    ],
+    "menus": [
+      { "menu": "plugins", "command": "markdown.preview" }
+    ],
+    "panels": [
+      {
+        "id": "markdown.preview.panel",
+        "title": "Markdown Preview",
+        "entry": "render_preview",
+        "placement": "right",
+        "width": 640,
+        "refresh": "edit"
+      }
+    ],
+    "settings": [
+      {
+        "key": "show_link_targets",
+        "type": "boolean",
+        "label": "Show link targets",
+        "description": "Append the destination URL after link text.",
+        "default": true
+      },
+      {
+        "key": "show_frontmatter",
+        "type": "boolean",
+        "label": "Show front matter",
+        "description": "Render YAML front matter instead of hiding it.",
+        "default": false
+      }
+    ]
+  }
+}

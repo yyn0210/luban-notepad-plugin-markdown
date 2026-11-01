@@ -64,15 +64,17 @@
 ```
 
 - span `style` 是空格分隔的标志：`bold`、`italic`、`underline`、`strike`、`code`、
-  `link`。
+  `link`、`muted`。
 - span `role` 使用编辑器同款语义角色（`keyword`、`string`、`comment`、`number`、
   `function`、`type` 等），宿主用当前语法主题解析颜色。
 - 校验：单行文本和 spans 总量均不超过 4 KiB；spans 拼接必须等于 `text`，否则丢弃
   spans 并按纯文本渲染；未知样式和角色忽略；行数上限沿用 5,000。
 - 渲染使用 `StyledText` + `TextRun`；行容器 `gap_0`，间距由行样式提供，连续代码行、
   引用行和表格行拼成完整块。
-- code 行使用编辑器字体和语法主题的 `editor_background`/`editor_foreground`；标题
-  使用更大字号；列表按 `indent` 缩进；rule 渲染为分隔线。
+- code 行使用编辑器字体、语法主题前景色和面板的 `secondary` 背景，确保浅色主题下
+  代码块也可见；标题使用更大字号；列表按 `indent` 缩进；rule 渲染为分隔线。
+- 面板内容区固定为卡片高度，列表可滚动；右侧始终显示滚动条。面板获得焦点后滚轮
+  可滚动，点击面板会把焦点交给列表，点击编辑器则回到编辑。
 
 ### `luban.syntax.highlight`
 
@@ -87,6 +89,12 @@ local spans, err = luban.syntax.highlight(code_text, "rust")
   `luban-app/src/highlighter.rs` 的 `find_syntax`、`parse`、`semantic_name` 抽到
   `luban-core`，编辑器和插件运行时共用。
 
+### `luban.panel.open`
+
+`luban.panel.open(panel_id)` 允许插件命令打开或刷新自己声明的面板；宿主校验面板
+归属后走与“插件”菜单相同的打开流程。旧宿主没有此 API，命令通过通知提示用户从
+“插件”菜单打开面板。
+
 ### 自动刷新
 
 - `refresh: edit` 的面板打开时启动轮询任务：180ms 周期，编辑停止约 150ms 后刷新。
@@ -95,7 +103,8 @@ local spans, err = luban.syntax.highlight(code_text, "rust")
 - 刷新前对可预览文档调用 `sync_active`；大文件/只读/非文本文档不强制同步，插件收到
   `nil` 显示不可预览。
 - 用 generation token 保证只有一个轮询任务；面板关闭或换面板即退出。
-- 滚动位置通过稳定的 `#plugin-panel-lines` 元素 id 保持。
+- 滚动位置通过面板状态里的 `ScrollHandle` 保持，自动刷新不会跳回顶部；滚轮在面板
+  获得焦点后生效，右侧滚动条始终可见。
 
 ## 插件
 
@@ -130,7 +139,8 @@ tests/fixtures/*.md
 ### 命令、面板与设置
 
 - 命令：`markdown.preview`，标签 `Markdown: Preview`，默认 `ctrl+shift+v`，
-  `when: edit_text`。
+  `when: edit_text`；命令通过 `luban.panel.open("markdown.preview.panel")` 打开面板，
+  旧宿主则提示从“插件”菜单打开。
 - 面板：`markdown.preview.panel`，右侧，`width: 640`，`refresh: edit`，标题动态显示
   `<文件名> — Preview`。
 - 设置：`show_link_targets`（默认 true）、`show_frontmatter`（默认 false）。
