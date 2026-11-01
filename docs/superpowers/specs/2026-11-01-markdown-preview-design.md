@@ -129,7 +129,7 @@ tests/fixtures/*.md
   GFM 表格、分隔线、YAML frontmatter（默认隐藏）、原始 HTML（按文本显示）。
 - 行内：粗体、斜体、粗斜体、行内代码、链接、图片占位、删除线、自动链接、转义、
   硬换行。
-- 表格：Unicode 制表符 + 中日韩显示宽度；单表最大约 96 字符，超宽单元格截断。
+- 表格：Unicode 制表符 + 中日韩显示宽度；单表最大约 72 字符，超宽单元格截断。
 - 代码块：合并后调用 `luban.syntax.highlight`，按行切回 spans；单块 64 KiB、整篇
   高亮 128 KiB；API 不存在或超限时退回纯 code 样式。
 - 链接：链接文字用 link 样式；目标 URL 用 muted 样式附在括号中（可关闭）。

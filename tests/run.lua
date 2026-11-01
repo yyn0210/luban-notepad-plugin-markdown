@@ -289,6 +289,19 @@ test("tables align columns by display width including CJK", function()
   truthy(line_with(panel, "table", "中文"), "CJK cell missing")
 end)
 
+test("wide tables stay inside the panel width", function()
+  local wide = string.rep("a", 80)
+  local panel = render("| left | right |\n|---|---|\n| " .. wide .. " | " .. wide .. " |\n")
+  local seen = 0
+  for _, line in ipairs(panel.lines) do
+    if line.style == "table" then
+      seen = seen + 1
+      truthy(M._internals.display_width(line.text) <= 72, "table line is too wide")
+    end
+  end
+  truthy(seen >= 4, "wide table lines missing")
+end)
+
 test("frontmatter is hidden by default and rendered on request", function()
   local hidden = render("---\ntitle: Demo\n---\n\n# Body\n")
   truthy(not line_with(hidden, "text", "title:"), "frontmatter leaked")

@@ -1,7 +1,7 @@
 {
   "id": "io.github.yyn0210.markdown-preview",
   "name": "Markdown Preview",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "api_version": 1,
   "main": "main.lua",
   "description": "Rendered Markdown preview in a side panel: GFM tables, task lists, quotes and syntax-highlighted code blocks.",
@@ -20,7 +20,10 @@
       }
     ],
     "menus": [
-      { "menu": "plugins", "command": "markdown.preview" }
+      {
+        "menu": "plugins",
+        "command": "markdown.preview"
+      }
     ],
     "panels": [
       {
