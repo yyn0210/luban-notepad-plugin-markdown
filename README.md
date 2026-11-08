@@ -1,10 +1,12 @@
 # Markdown Preview for Luban Notepad
 
-在 Luban Notepad 的右侧面板中预览当前 Markdown 文档。插件是单文件 Lua，运行在
-编辑器沙箱内，只读取当前文档，不需要文件系统、网络或子进程权限。
+在 Luban Notepad 的右侧面板中预览当前 Markdown 文档。插件运行在编辑器沙箱内，
+只读取当前文档，不需要文件系统、网络或子进程权限。需要插件 API v2 的宿主
+（`luban.version == 2`）。
 
 A rendered Markdown preview for [Luban Notepad](https://github.com/yyn0210/luban-notepad).
-The plugin is a single sandboxed Lua file and requests no permissions.
+The plugin runs sandboxed, requests no permissions, and requires a host with
+plugin API v2 (`luban.version == 2`).
 
 ## 功能
 
@@ -12,23 +14,40 @@ The plugin is a single sandboxed Lua file and requests no permissions.
   自动链接、引用、嵌套列表、任务列表、围栏/缩进代码块、GFM 表格、分隔线。
 - 代码块使用编辑器当前的 syntect 语法集和语法主题配色。
 - 表格按中日韩显示宽度对齐，超宽列自动截断。
-- 编辑文档时预览自动刷新（约 150ms 防抖）；也可以点面板上的“刷新”。
+- **标题折叠**：点击标题行（或执行 `Markdown: Toggle Heading Fold`）折叠/展开
+  该标题下的内容，刷新保持面板滚动位置。
+- **点击跳转源码**：点击段落行把编辑器光标移到对应源码行
+  （`Markdown: Go to Source Line`）。
+- 编辑文档时预览自动刷新（宿主防抖）；也可以点面板上的“刷新”。
+- 解析结果在两次渲染之间缓存（`on_edit` 失效），折叠切换和手动刷新不重新解析。
 - YAML frontmatter 默认隐藏，可在插件设置中显示。
-- 旧版宿主自动降级：忽略富文本字段，显示纯文本回退和手动刷新。
 
 ## 兼容性
 
 | 宿主版本 | 体验 |
 | --- | --- |
-| Luban Notepad 1.0.0-preview.2 及以后 | 富文本预览、代码高亮、自动刷新 |
-| Luban Notepad 1.0.0-preview.1 | 纯文本预览、手动刷新（插件仍可安装） |
+| Luban Notepad 插件 API v2（`luban.version == 2`） | 完整功能 |
 
-插件清单的 `api_version` 为 1。
+`api_version` 为 2 的插件不会被 v1 宿主加载；激活时也会显式检查
+`luban.version >= 2`。
+
+## 模块布局
+
+插件根目录（zip 布局保持扁平，沙箱内 `require` 按插件根解析）：
+
+| 文件 | 职责 |
+| --- | --- |
+| `main.lua` | 组装：清单入口、设置、`on_edit` 解析缓存、折叠与跳转命令 |
+| `parser.lua` | 块级解析（含 frontmatter、源码行号、标题序号） |
+| `inline.lua` | 行内解析（强调、代码、链接、图片、自动链接） |
+| `renderer.lua` | 面板渲染（行组装、表格、代码块、折叠、行命令） |
+| `highlight.lua` | `luban.syntax.highlight` 的特性安全封装 |
+| `text.lua` | 文本/显示宽度工具（各模块共享） |
 
 ## 安装
 
 - **插件商店**：插件 → 插件商店…，搜索 “Markdown Preview”。
-- **手动安装**：把本仓库的 `plugin.json` 和 `main.lua` 放进
+- **手动安装**：把仓库中的 `plugin.json` 和全部 `.lua` 文件放进
   `<config-dir>/plugins/io.github.yyn0210.markdown-preview/`，然后在插件管理器中
   批准并启用（插件不申请任何权限）。
 
@@ -37,10 +56,9 @@ The plugin is a single sandboxed Lua file and requests no permissions.
 - 命令面板或“插件”菜单执行 `Markdown: Preview`。
 - 默认快捷键：`Ctrl+Shift+V`（可在快捷键编辑器中修改）。
 - 面板标题显示当前文件名；切换标签或编辑后自动跟随。
+- 点击标题行折叠/展开；点击段落行跳到源码（光标移到该行行首并聚焦编辑器）。
 - 面板上“刷新”可手动重算，“关闭”关闭面板。
-
-旧版宿主没有 `luban.panel.open`：命令会提示从“插件”菜单打开
-“Markdown Preview”面板。
+- 无参数调用折叠/跳转命令时，按当前光标位置取最近的标题/段落。
 
 ## 设置
 
@@ -59,7 +77,7 @@ The plugin is a single sandboxed Lua file and requests no permissions.
 ## 开发
 
 ```bash
-lua5.4 tests/run.lua            # 解析与渲染测试
+lua5.4 tests/run.lua            # 解析、渲染与交互测试
 python3 scripts/package.py --check
 python3 scripts/package.py      # 生成 dist/<id>-<version>.zip
 ```

@@ -1,13 +1,16 @@
 {
   "id": "io.github.yyn0210.markdown-preview",
   "name": "Markdown Preview",
-  "version": "1.0.1",
-  "api_version": 1,
+  "version": "2.0.0",
+  "api_version": 2,
   "main": "main.lua",
-  "description": "Rendered Markdown preview in a side panel: GFM tables, task lists, quotes and syntax-highlighted code blocks.",
+  "description": "Rendered Markdown preview in a side panel: GFM tables, task lists, quotes, syntax-highlighted code blocks, collapsible headings and click-to-source jumps.",
   "author": "yyn0210",
   "permissions": [],
   "activate": "activate",
+  "events": [
+    "on_edit"
+  ],
   "contributes": {
     "commands": [
       {
@@ -16,6 +19,20 @@
         "description": "Open or refresh the rendered Markdown preview",
         "entry": "open_preview",
         "default_keybinding": "ctrl+shift+v",
+        "when": "edit_text"
+      },
+      {
+        "id": "markdown.toggle-heading",
+        "label": "Markdown: Toggle Heading Fold",
+        "description": "Collapse or expand the section under a heading (from the preview panel)",
+        "entry": "toggle_heading",
+        "when": "edit_text"
+      },
+      {
+        "id": "markdown.goto-source",
+        "label": "Markdown: Go to Source Line",
+        "description": "Move the editor cursor to a preview paragraph's source line",
+        "entry": "goto_source",
         "when": "edit_text"
       }
     ],

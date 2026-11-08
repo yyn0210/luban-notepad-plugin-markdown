@@ -1,46 +1,109 @@
--- Standalone tests for main.lua (Lua 5.4).
+-- Standalone tests for the Markdown Preview plugin (Lua 5.4, plugin API v2).
 --
 -- Run from the repository root:
 --   lua5.4 tests/run.lua
 --
--- The harness supplies the same `luban` surface the host exposes. It never
--- runs inside the app sandbox, so `os` and `io` are available here only.
+-- The harness supplies the same `luban` surface a v2 host exposes. It never
+-- runs inside the app sandbox, so `os` and `io` are available here only, and
+-- plain `require` loads the plugin modules from the repository root.
 
 local PLUGIN_MAIN = os.getenv("PLUGIN_MAIN") or "main.lua"
 
+-- Modules live at the repository root next to main.lua; make them requireable
+-- no matter how the harness was invoked.
+local script_dir = (arg and arg[0] or ""):match("^(.*)[/\\]") or "."
+package.path = "./?.lua;" .. script_dir .. "/../?.lua;" .. package.path
+
 local current_doc = nil
-local current_settings = {}
+local current_settings = nil
 local highlight_roles = true
 local notifications = {}
+local cursor_calls = {}
+local command_calls = {}
+local handlers = {}
 
-local function reset_luban()
-  current_doc = nil
-  current_settings = {}
-  highlight_roles = true
-  notifications = {}
-  luban = {
-    log = function(level, message) end,
+local function make_luban()
+  return {
+    version = 2,
+    log = function(level, message)
+      notifications[#notifications + 1] = "log:" .. level .. ":" .. message
+    end,
     notify = function(message)
       notifications[#notifications + 1] = message
     end,
-    get_document = function()
-      return current_doc
-    end,
+    document = {
+      get = function()
+        return current_doc
+      end,
+      set_text = function(text, sel_start, sel_end)
+        if not current_doc then
+          error("unsupported document")
+        end
+        current_doc.text = text
+        return nil
+      end,
+      insert = function(text)
+        if not current_doc then
+          error("unsupported document")
+        end
+        current_doc.text = current_doc.text .. text
+        return nil
+      end,
+      set_cursor = function(line, column)
+        cursor_calls[#cursor_calls + 1] = { line = line, column = column }
+        if current_doc then
+          current_doc.line = line
+          current_doc.column = column
+        end
+        return nil
+      end,
+    },
     settings = {
       get = function(key)
+        if current_settings == nil then
+          return nil
+        end
         return current_settings[key]
+      end,
+      set = function(key, value)
+        current_settings = current_settings or {}
+        current_settings[key] = value
+        return nil
       end,
     },
     panel = {
       open = function(id)
         notifications[#notifications + 1] = "open:" .. id
-        return true
+        return nil
+      end,
+      refresh = function(id)
+        notifications[#notifications + 1] = "refresh:" .. id
+        return nil
+      end,
+    },
+    command = {
+      run = function(id, args)
+        command_calls[#command_calls + 1] = { id = id, args = args }
+        return nil
+      end,
+    },
+    events = {
+      on = function(name, fn)
+        if type(fn) ~= "function" then
+          error("event handler must be a function")
+        end
+        handlers[name] = fn
+        return nil
+      end,
+      off = function(name)
+        handlers[name] = nil
+        return nil
       end,
     },
     syntax = {
       highlight = function(text, language)
         if not highlight_roles then
-          return nil, "highlighting disabled"
+          error("highlighting disabled")
         end
         -- A tiny stand-in for the host highlighter: split the first `fn` so
         -- the role plumbing has something to prove.
@@ -54,6 +117,17 @@ local function reset_luban()
       end,
     },
   }
+end
+
+local function reset_luban()
+  current_doc = nil
+  current_settings = {}
+  highlight_roles = true
+  notifications = {}
+  cursor_calls = {}
+  command_calls = {}
+  handlers = {}
+  luban = make_luban()
 end
 
 reset_luban()
@@ -122,6 +196,13 @@ local function check_panel(panel)
     if line.indent ~= nil then
       truthy(line.indent >= 0 and line.indent <= 8, "line " .. index .. " indent out of range")
     end
+    if line.command ~= nil then
+      truthy(type(line.command) == "table", "line " .. index .. " command is not a table")
+      truthy(type(line.command.id) == "string", "line " .. index .. " command id is not a string")
+      if line.command.args ~= nil then
+        truthy(type(line.command.args) == "table", "line " .. index .. " command args is not a table")
+      end
+    end
     if line.spans then
       truthy(#line.spans <= 512, "line " .. index .. " has too many spans")
       local parts = {}
@@ -134,8 +215,21 @@ local function check_panel(panel)
   end
 end
 
+local function make_doc(path, text, line)
+  return {
+    path = path,
+    language = "Markdown",
+    text = text,
+    line = line or 1,
+    column = 1,
+    selection_start = 1,
+    selection_end = 1,
+    modified = false,
+  }
+end
+
 local function render(text, settings)
-  current_doc = { path = "/tmp/test.md", language = "Markdown", text = text }
+  current_doc = make_doc("/tmp/test.md", text)
   current_settings = settings or {}
   local panel = M.render_preview({})
   check_panel(panel)
@@ -179,6 +273,25 @@ local function line_texts(panel)
 end
 
 -- ---------------------------------------------------------------------------
+
+test("modules load and main assembles them", function()
+  local text_mod = require("text")
+  local inline_mod = require("inline")
+  local parser_mod = require("parser")
+  local renderer_mod = require("renderer")
+  local highlight_mod = require("highlight")
+  truthy(type(text_mod.display_width) == "function", "text module incomplete")
+  truthy(type(inline_mod.parse_inline) == "function", "inline module incomplete")
+  truthy(type(parser_mod.parse) == "function", "parser module incomplete")
+  truthy(type(renderer_mod.render) == "function", "renderer module incomplete")
+  truthy(type(highlight_mod.highlight) == "function", "highlight module incomplete")
+  truthy(type(M.render_preview) == "function", "main missing render_preview")
+  truthy(type(M.open_preview) == "function", "main missing open_preview")
+  truthy(type(M.toggle_heading) == "function", "main missing toggle_heading")
+  truthy(type(M.goto_source) == "function", "main missing goto_source")
+  truthy(type(M.on_edit) == "function", "main missing on_edit")
+  truthy(type(M.activate) == "function", "main missing activate")
+end)
 
 test("headings, setext headings and over-long ATX runs", function()
   local panel = render("# One\n\n## Two **bold**\n\n###### Six\n\n####### seven\n\nSetext\n======\n")
@@ -274,7 +387,7 @@ test("tables align columns by display width including CJK", function()
   local header
   for _, line in ipairs(panel.lines) do
     if line.style == "table" then
-      widths[#widths + 1] = M._internals.display_width(line.text)
+      widths[#widths + 1] = require("text").display_width(line.text)
       if line.text:find("Name", 1, true) then
         header = line
       end
@@ -296,7 +409,7 @@ test("wide tables stay inside the panel width", function()
   for _, line in ipairs(panel.lines) do
     if line.style == "table" then
       seen = seen + 1
-      truthy(M._internals.display_width(line.text) <= 72, "table line is too wide")
+      truthy(require("text").display_width(line.text) <= 72, "table line is too wide")
     end
   end
   truthy(seen >= 4, "wide table lines missing")
@@ -338,14 +451,9 @@ test("empty and unsupported documents explain themselves", function()
   truthy(message and message.text:find("not available", 1, true), "unsupported document message missing")
 end)
 
-test("the command opens the declared panel, with a menu fallback on old hosts", function()
+test("the command opens the declared panel", function()
   M.open_preview({})
   eq(notifications[#notifications], "open:markdown.preview.panel")
-  local original = luban.panel
-  luban.panel = nil
-  M.open_preview({})
-  truthy(notifications[#notifications]:find("Plugins menu", 1, true), "old host fallback missing")
-  luban.panel = original
 end)
 
 test("long lines and many spans stay within host limits", function()
@@ -390,6 +498,162 @@ test("the rich fixture keeps every invariant", function()
   truthy(line_with(panel, "table"), "fixture table missing")
   truthy(line_with(panel, "code"), "fixture code missing")
   truthy(line_with(panel, "list"), "fixture list missing")
+end)
+
+-- ---------------------------------------------------------------------------
+-- v2 interactions: activation, cache, folds, source jumps
+-- ---------------------------------------------------------------------------
+
+test("activate registers on_edit and rejects pre-v2 hosts", function()
+  local original_version = luban.version
+  luban.version = 1
+  local ok_run, error_message = pcall(M.activate, {})
+  truthy(not ok_run, "activate must reject pre-v2 hosts")
+  contains(tostring(error_message), "v2", "error message must mention v2")
+  luban.version = original_version
+  truthy(handlers["on_edit"] == nil, "no handler before activation")
+  M.activate({})
+  truthy(handlers["on_edit"] == M.on_edit, "activate must register the on_edit handler")
+end)
+
+test("on_edit invalidates the cache; two renders with the same text parse once", function()
+  M.on_edit(nil)
+  local parser_mod = require("parser")
+  local original_parse = parser_mod.parse
+  local calls = 0
+  parser_mod.parse = function(text, opts)
+    calls = calls + 1
+    return original_parse(text, opts)
+  end
+  local text = "# Cache\n\nparagraph one\n"
+  render(text)
+  local after_first = calls
+  truthy(after_first >= 1, "first render must parse")
+  render(text)
+  eq(calls, after_first, "second render must reuse the cached blocks")
+  M.on_edit(current_doc)
+  render(text)
+  eq(calls, after_first + 1, "a render after on_edit must reparse")
+  M.on_edit(nil)
+  render(text)
+  eq(calls, after_first + 2, "on_edit(nil) must clear the cache too")
+  parser_mod.parse = original_parse
+end)
+
+test("on_edit handles a closed tab (nil payload) without breaking the next render", function()
+  M.on_edit(make_doc("/tmp/edge.md", "## x\n"))
+  M.on_edit(nil)
+  current_doc = make_doc("/tmp/after-close.md", "# back\n")
+  current_settings = {}
+  local panel = M.render_preview({})
+  check_panel(panel)
+  truthy(line_with(panel, "h1", "back"), "render after a tab close must work")
+end)
+
+test("heading and paragraph lines carry their command and source line", function()
+  local panel = render("# Title\n\nFirst paragraph.\n\n## Sub\n")
+  local h1 = line_with(panel, "h1", "Title")
+  truthy(h1.command, "heading line carries no command")
+  eq(h1.command.id, "markdown.toggle-heading", "heading command id")
+  eq(h1.command.args.index, 1, "heading sequence number")
+  local para = line_with(panel, "text", "First paragraph.")
+  truthy(para.command, "paragraph line carries no command")
+  eq(para.command.id, "markdown.goto-source", "paragraph command id")
+  eq(para.command.args.line, 3, "paragraph source line")
+  local h2 = line_with(panel, "h2", "Sub")
+  eq(h2.command.args.index, 2, "second heading sequence number")
+end)
+
+test("goto-source args account for frontmatter offsets", function()
+  local panel = render("---\ntitle: Demo\n---\n\n# Body\n\nPara after frontmatter.\n")
+  local h1 = line_with(panel, "h1", "Body")
+  eq(h1.command.args.index, 1, "heading sequence after frontmatter")
+  local para = line_with(panel, "text", "Para after frontmatter.")
+  eq(para.command.args.line, 7, "paragraph line after frontmatter (offset by the frontmatter)")
+end)
+
+test("toggle_heading folds and unfolds a section and keeps sequence numbers", function()
+  local fold_path = "/tmp/fold-test.md"
+  local text = "# One\n\npara one\n\n## Two\n\npara two\n\n### Deep\n\npara deep\n\n# Three\n\npara three\n"
+  current_doc = make_doc(fold_path, text)
+  current_settings = {}
+
+  local open_panel = M.render_preview({})
+  check_panel(open_panel)
+  truthy(line_with(open_panel, "text", "para two"), "para two missing while open")
+  truthy(line_with(open_panel, "text", "para deep"), "para deep missing while open")
+  local h2_open = line_with(open_panel, "h2", "Two")
+  eq(h2_open.text, "▾ Two", "open heading should carry the unfold indicator")
+  eq(h2_open.command.args.index, 2, "heading seq while open")
+
+  M.toggle_heading({}, { index = 2 })
+  truthy(notifications[#notifications] == "refresh:markdown.preview.panel",
+    "toggle must refresh the preview panel")
+  local folded = M.render_preview({})
+  check_panel(folded)
+  truthy(line_with(folded, "text", "para one"), "para one must stay visible")
+  truthy(not line_with(folded, "text", "para two"), "para two must be suppressed while folded")
+  truthy(not line_with(folded, "text", "para deep"), "nested children must be suppressed too")
+  truthy(line_with(folded, "text", "para three"), "para three must stay visible")
+  local h2_folded = line_with(folded, "h2", "Two")
+  eq(h2_folded.text, "▸ Two", "folded heading should carry the fold indicator")
+  local three = line_with(folded, "h1", "Three")
+  truthy(three.command, "Three lost its command while another heading was folded")
+  eq(three.command.args.index, 4, "heading sequence numbers must not shift while folded")
+
+  M.toggle_heading({}, { index = 2 })
+  local reopened = M.render_preview({})
+  check_panel(reopened)
+  truthy(line_with(reopened, "text", "para two"), "para two must come back after unfold")
+  local h2_reopened = line_with(reopened, "h2", "Two")
+  eq(h2_reopened.text, "▾ Two", "reopened heading shows the unfold indicator again")
+  current_doc = nil
+end)
+
+test("toggle_heading without args folds the heading at or above the cursor", function()
+  local fold_path = "/tmp/fold-cursor.md"
+  local text = "# One\n\npara one\n\n## Two\n\npara two\n"
+  current_doc = make_doc(fold_path, text, 3)
+  current_settings = {}
+  M.render_preview({})
+
+  -- Cursor on "para one" (line 3): the enclosing heading is "# One"; folding
+  -- an H1 swallows its nested H2 section too.
+  M.toggle_heading({})
+  local folded = M.render_preview({})
+  truthy(not line_with(folded, "text", "para one"), "cursor inside section one must fold it")
+  truthy(not line_with(folded, "text", "para two"), "an H1 fold must swallow the nested H2 section")
+  M.toggle_heading({})
+  local reopened = M.render_preview({})
+  truthy(line_with(reopened, "text", "para one"), "second toggle must unfold")
+
+  -- Cursor on "para two" (line 7): the enclosing heading is "## Two".
+  current_doc = make_doc(fold_path, text, 7)
+  M.toggle_heading({})
+  local folded_two = M.render_preview({})
+  truthy(line_with(folded_two, "text", "para one"), "cursor in section two must leave one open")
+  truthy(not line_with(folded_two, "text", "para two"), "cursor in section two must fold two")
+  current_doc = nil
+end)
+
+test("goto_source records set_cursor(line, 1) and falls back to the cursor's block", function()
+  current_doc = make_doc("/tmp/jump.md", "# Head\n\nfirst para\n\nsecond para\n", 1)
+  current_settings = {}
+  M.goto_source({}, { line = 3 })
+  local last = cursor_calls[#cursor_calls]
+  truthy(last, "set_cursor was not called")
+  eq(last.line, 3, "goto_source line")
+  eq(last.column, 1, "goto_source column")
+
+  current_doc = make_doc("/tmp/jump.md", "# Head\n\nfirst para\n\nsecond para\n", 4)
+  M.goto_source({})
+  last = cursor_calls[#cursor_calls]
+  eq(last.line, 3, "cursor fallback should pick the block at or above the cursor")
+
+  current_doc = make_doc("/tmp/jump.md", "# Head\n\nfirst para\n\nsecond para\n", 1)
+  M.goto_source({})
+  last = cursor_calls[#cursor_calls]
+  eq(last.line, 1, "cursor above everything falls back to the first block")
 end)
 
 io.write(string.format("\n%d passed, %d failed\n", PASSED, FAILED))
