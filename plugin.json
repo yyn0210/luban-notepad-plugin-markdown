@@ -1,10 +1,10 @@
 {
   "id": "io.github.yyn0210.markdown-preview",
   "name": "Markdown Preview",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "api_version": 2,
   "main": "main.lua",
-  "description": "Rendered Markdown preview in a side panel: GFM tables, task lists, quotes, syntax-highlighted code blocks, collapsible headings and click-to-source jumps.",
+  "description": "VSCode-style rendered Markdown preview in a side panel: real GFM tables, task lists, quotes, syntax-highlighted code blocks, collapsible headings and click-to-source jumps.",
   "author": "yyn0210",
   "permissions": [],
   "activate": "activate",
@@ -57,8 +57,8 @@
         "key": "show_link_targets",
         "type": "boolean",
         "label": "Show link targets",
-        "description": "Append the destination URL after link text.",
-        "default": true
+        "description": "Append the destination URL after link text (off by default, like VSCode/IDEA previews).",
+        "default": false
       },
       {
         "key": "show_frontmatter",

@@ -18,10 +18,21 @@ local MAX_LINE_BYTES = 3500
 local MAX_TABLE_WIDTH = 72
 local MAX_TABLE_CELL = 32
 local MAX_TABLE_COLUMNS = 10
+local MAX_CELL_WEIGHT = 24
+local MAX_CELL_BYTES = 1200
 local MAX_TARGET_BYTES = 512
 
 local TOGGLE_COMMAND = "markdown.toggle-heading"
 local GOTO_COMMAND = "markdown.goto-source"
+
+-- Hosts older than panel-table support render `style = "table"` rows as
+-- monospace text. When the host advertises the feature, the renderer emits
+-- structured cells instead so the preview gets a real HTML-like table.
+local function host_has(feature)
+  return type(luban) == "table"
+    and type(luban.features) == "table"
+    and luban.features[feature] == true
+end
 
 -- ===========================================================================
 -- Span plumbing
@@ -167,19 +178,30 @@ end
 
 local function render_inline_lines(spans, style, indent, renderer, opts, command)
   local segments = split_spans_at_newlines(spans)
+  local chunks = {}
   for _, segment in ipairs(segments) do
-    local chunks = split_long_segment(segment, MAX_LINE_BYTES)
-    if #chunks == 0 then
-      chunks = { {} }
+    local split = split_long_segment(segment, MAX_LINE_BYTES)
+    if #split == 0 then
+      split = { {} }
     end
-    for _, chunk in ipairs(chunks) do
-      local line = make_line(chunk, style, indent, opts)
-      if command then
-        line.command = command
-      end
-      if not push_line(renderer, line) then
-        return
-      end
+    for _, chunk in ipairs(split) do
+      chunks[#chunks + 1] = chunk
+    end
+  end
+  local last = #chunks
+  for index, chunk in ipairs(chunks) do
+    local line = make_line(chunk, style, indent, opts)
+    if index < last then
+      -- Hard breaks and over-long splits continue the same paragraph: only
+      -- the final line keeps the block's bottom spacing, so a hard break
+      -- reads as a line break instead of a paragraph gap.
+      line.tight = true
+    end
+    if command then
+      line.command = command
+    end
+    if not push_line(renderer, line) then
+      return
     end
   end
 end
@@ -229,10 +251,18 @@ local function split_highlighted_spans(spans)
   return lines
 end
 
-local function render_code(renderer, code, lang, opts)
+local function render_code(renderer, code, lang, opts, separate)
   local lines = T.split_lines(code)
   if code == "" then
     lines = { "" }
+  end
+  local first = true
+  local function emit(line)
+    if separate and first then
+      line.break_before = true
+    end
+    first = false
+    push_line(renderer, line)
   end
   local highlighted = nil
   local normalized = LANG_ALIASES[lang] or lang
@@ -256,11 +286,11 @@ local function render_code(renderer, code, lang, opts)
       end
       local line_text = table.concat(text)
       if #line_text > MAX_LINE_BYTES then
-        push_line(renderer, { text = T.utf8_prefix(line_text, MAX_LINE_BYTES - 1) .. "…", style = "code" })
+        emit({ text = T.utf8_prefix(line_text, MAX_LINE_BYTES - 1) .. "…", style = "code" })
       elseif #spans > 0 and #spans <= 400 then
-        push_line(renderer, { text = line_text, style = "code", spans = spans })
+        emit({ text = line_text, style = "code", spans = spans })
       else
-        push_line(renderer, { text = line_text, style = "code" })
+        emit({ text = line_text, style = "code" })
       end
       if renderer.overflow then
         return
@@ -272,7 +302,7 @@ local function render_code(renderer, code, lang, opts)
       if #text > MAX_LINE_BYTES then
         text = T.utf8_prefix(text, MAX_LINE_BYTES - 1) .. "…"
       end
-      push_line(renderer, { text = text, style = "code" })
+      emit({ text = text, style = "code" })
       if renderer.overflow then
         return
       end
@@ -335,7 +365,8 @@ local function table_line(parts)
   return table.concat(text), spans
 end
 
-local function render_table(block, renderer, opts)
+-- Legacy monospace table for hosts without structured panel tables.
+local function render_ascii_table(block, renderer, opts)
   local columns = #block.header
   if columns == 0 then
     return
@@ -427,9 +458,127 @@ local function render_table(block, renderer, opts)
   push_table(border("└", "┴", "┘"), nil)
 end
 
+-- Cell text for a structured table row: inline markdown rendered to spans,
+-- with the link-target suffix (when enabled) kept in both text and spans.
+local function cell_content(cell, opts)
+  local spans = I.parse_inline(cell or "", {}, opts)
+  local text, panel = to_panel_spans(spans, opts)
+  if #text > MAX_CELL_BYTES then
+    text = T.utf8_prefix(text, MAX_CELL_BYTES - 1) .. "…"
+    panel = nil
+  end
+  if panel and #panel == 0 then
+    panel = nil
+  end
+  return text, panel
+end
+
+local function render_table_cells(block, renderer, opts)
+  local columns = math.min(#block.header, MAX_TABLE_COLUMNS)
+  if columns == 0 then
+    return
+  end
+  local widths = {}
+  for column = 1, columns do
+    local width = T.display_width(block.header[column] or "")
+    for _, row in ipairs(block.rows) do
+      local cell_width = T.display_width(row[column] or "")
+      if cell_width > width then
+        width = cell_width
+      end
+    end
+    widths[column] = math.max(1, math.min(MAX_CELL_WEIGHT, width))
+  end
+  local function row_cells(cells, header)
+    local out = {}
+    for column = 1, columns do
+      local text, spans = cell_content(cells[column] or "", opts)
+      out[column] = {
+        text = text,
+        spans = spans,
+        align = block.aligns[column] or "left",
+        header = header,
+        weight = widths[column],
+      }
+    end
+    return out
+  end
+  push_line(renderer, { text = "", style = "table", cells = row_cells(block.header, true) })
+  for _, row in ipairs(block.rows) do
+    push_line(renderer, { text = "", style = "table", cells = row_cells(row, false) })
+    if renderer.overflow then
+      return
+    end
+  end
+end
+
+local function render_table(block, renderer, opts)
+  if host_has("panel_tables") then
+    render_table_cells(block, renderer, opts)
+  else
+    render_ascii_table(block, renderer, opts)
+  end
+end
+
 local function list_bullet(depth)
   local bullets = { "•", "◦", "▪", "‣", "·" }
   return bullets[(depth % #bullets) + 1]
+end
+
+-- ===========================================================================
+-- Raw HTML blocks
+-- ===========================================================================
+
+local HTML_ENTITIES = {
+  amp = "&",
+  lt = "<",
+  gt = ">",
+  quot = '"',
+  apos = "'",
+  nbsp = "\u{00A0}",
+}
+
+local function decode_html_entities(text)
+  return (text:gsub("&(#?[%w]+);", function(name)
+    if name:sub(1, 1) == "#" then
+      local number = name:sub(2)
+      local code = number:match("^%d+$") and tonumber(number)
+        or (number:match("^[xX]%x+$") and tonumber(number:sub(2), 16))
+      if code and code > 0 and code <= 0x10FFFF then
+        return utf8.char(code)
+      end
+      return "&" .. name .. ";"
+    end
+    return HTML_ENTITIES[name:lower()] or ("&" .. name .. ";")
+  end))
+end
+
+-- Visible text of an HTML block, mirroring the previews' sanitized rendering:
+-- comments and script/style bodies disappear, block-level closing tags become
+-- line breaks, all remaining tags are dropped and entities are decoded.
+local function html_visible_lines(lines)
+  local joined = table.concat(lines, "\n")
+  joined = joined:gsub("<!%-%-.-%-%->", "")
+  joined = joined:gsub("<script[^>]*>.-</script%s*>", "")
+  joined = joined:gsub("<style[^>]*>.-</style%s*>", "")
+  joined = joined:gsub("<br%s*/?>", "\n")
+  for _, tag in ipairs({
+    "p", "div", "h1", "h2", "h3", "h4", "h5", "h6",
+    "li", "tr", "blockquote", "pre", "section", "article", "details", "summary",
+  }) do
+    joined = joined:gsub("</" .. tag .. "%s*>", "\n")
+    joined = joined:gsub("</" .. tag:upper() .. "%s*>", "\n")
+  end
+  joined = joined:gsub("<[^>]*>", "")
+  joined = decode_html_entities(joined)
+  local out = {}
+  for line in (joined .. "\n"):gmatch("(.-)\n") do
+    line = line:gsub("^%s+", ""):gsub("%s+$", "")
+    if line ~= "" then
+      out[#out + 1] = line
+    end
+  end
+  return out
 end
 
 -- ===========================================================================
@@ -459,7 +608,12 @@ local render_blocks
 local function render_heading(block, renderer, opts)
   local seq = block.seq or 0
   local collapsed = opts.collapsed ~= nil and opts.collapsed[seq] == true
-  local spans = { { text = collapsed and "▸ " or "▾ ", muted = true } }
+  local spans = {}
+  if collapsed then
+    -- Open headings stay bare like the VSCode/IDEA previews; only a folded
+    -- section advertises its expandable state.
+    spans[1] = { text = "▸ ", muted = true }
+  end
   for _, span in ipairs(I.parse_inline(block.text, {}, opts)) do
     spans[#spans + 1] = span
   end
@@ -470,6 +624,24 @@ local function render_heading(block, renderer, opts)
 end
 
 local function render_paragraph(block, renderer, opts)
+  -- A paragraph that is exactly one image becomes a real image block on hosts
+  -- that render panel images; inline images elsewhere stay alt placeholders.
+  local alt, dest = block.text:match("^%s*!%[([^%]]*)%]%(%s*<([^>]*)>%s*%)%s*$")
+  if not alt then
+    alt, dest = block.text:match("^%s*!%[([^%]]*)%]%(%s*([^%s%)]+)%s*%)%s*$")
+  end
+  if alt and dest and dest ~= ""
+    and not dest:match("^[%a][%w+.-]*://")
+    and dest:sub(1, 5) ~= "data:"
+    and dest:sub(1, 2) ~= "//"
+  then
+    push_line(renderer, {
+      text = alt ~= "" and alt or "image",
+      style = "image",
+      image = dest,
+    })
+    return
+  end
   local spans = I.parse_inline(block.text, {}, opts)
   if block.line then
     render_inline_lines(spans, "text", 0, renderer, opts, {
@@ -481,7 +653,7 @@ local function render_paragraph(block, renderer, opts)
   end
 end
 
-local function render_block(block, renderer, opts, quote_depth)
+local function render_block(block, renderer, opts, quote_depth, previous_kind)
   if block.kind == "heading" then
     local spans = I.parse_inline(block.text, {}, opts)
     if quote_depth > 0 then
@@ -500,20 +672,26 @@ local function render_block(block, renderer, opts, quote_depth)
       render_paragraph(block, renderer, opts)
     end
   elseif block.kind == "code" then
-    render_code(renderer, table.concat(block.lines, "\n"), block.lang or "", opts)
+    render_code(
+      renderer,
+      table.concat(block.lines, "\n"),
+      block.lang or "",
+      opts,
+      previous_kind == "code"
+    )
   elseif block.kind == "list" then
     for _, item in ipairs(block.items) do
       local spans = {}
       local marker
       if item.checked ~= nil then
         marker = item.checked and "☑ " or "☐ "
-        spans[#spans + 1] = { text = marker, muted = true }
+        spans[#spans + 1] = { text = marker }
       elseif item.ordered then
         marker = item.marker .. " "
-        spans[#spans + 1] = { text = marker, muted = true }
+        spans[#spans + 1] = { text = marker }
       else
         marker = list_bullet(item.depth) .. " "
-        spans[#spans + 1] = { text = marker, muted = true }
+        spans[#spans + 1] = { text = marker }
       end
       local content = I.parse_inline(item.text, {}, opts)
       for _, span in ipairs(content) do
@@ -522,15 +700,36 @@ local function render_block(block, renderer, opts, quote_depth)
       render_inline_lines(spans, "list", item.depth + quote_depth, renderer, opts)
     end
   elseif block.kind == "quote" then
-    render_blocks(block.blocks, renderer, opts, quote_depth + 1)
+    local first = #renderer.lines + 1
+    render_blocks(block.blocks, renderer, opts, quote_depth + 1, previous_kind)
+    -- Keep the quote's left bar continuous: all but the last line drop their
+    -- bottom margin, while the last one still separates the quote from the
+    -- following block.
+    for index = first, #renderer.lines - 1 do
+      renderer.lines[index].tight = true
+    end
   elseif block.kind == "table" then
     render_table(block, renderer, opts)
   elseif block.kind == "rule" then
     push_line(renderer, { text = "", style = "rule" })
   elseif block.kind == "html" then
-    for _, line in ipairs(block.lines) do
-      push_line(renderer, { text = line, style = "muted" })
-      if renderer.overflow then
+    local visible = html_visible_lines(block.lines)
+    local last = #visible
+    for index, text in ipairs(visible) do
+      local line = {
+        text = text,
+        style = quote_depth > 0 and "quote" or "text",
+      }
+      if quote_depth > 0 then
+        line.indent = quote_depth
+      end
+      if index < last then
+        line.tight = true
+      end
+      if block.line then
+        line.command = { id = GOTO_COMMAND, args = { line = block.line } }
+      end
+      if not push_line(renderer, line) then
         return
       end
     end
@@ -538,8 +737,9 @@ local function render_block(block, renderer, opts, quote_depth)
 end
 
 -- Forward declaration: quote blocks recurse into render_blocks.
-render_blocks = function(blocks, renderer, opts, quote_depth)
+render_blocks = function(blocks, renderer, opts, quote_depth, initial_kind)
   quote_depth = quote_depth or 0
+  local last_kind = initial_kind
   local i = 1
   while i <= #blocks do
     local block = blocks[i]
@@ -554,9 +754,10 @@ render_blocks = function(blocks, renderer, opts, quote_depth)
       render_paragraph(block, renderer, opts)
       i = i + 1
     else
-      render_block(block, renderer, opts, quote_depth)
+      render_block(block, renderer, opts, quote_depth, last_kind)
       i = i + 1
     end
+    last_kind = block.kind
     if renderer.overflow then
       return
     end
@@ -584,7 +785,7 @@ function M.render(parsed, opts)
     push_line(renderer, { text = "Front matter", style = "muted" })
     render_code(renderer, table.concat(parsed.frontmatter, "\n"), "yaml", opts)
   end
-  render_blocks(parsed.blocks, renderer, opts, 0)
+  render_blocks(parsed.blocks, renderer, opts, 0, parsed.frontmatter and "code" or nil)
   if parsed.truncated then
     renderer.lines[#renderer.lines + 1] = {
       text = "Preview truncated: the document is larger than 512 KiB.",

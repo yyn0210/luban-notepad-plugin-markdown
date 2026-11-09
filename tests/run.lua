@@ -25,6 +25,10 @@ local handlers = {}
 local function make_luban()
   return {
     version = 2,
+    features = {
+      panel_tables = true,
+      panel_tight_lines = true,
+    },
     log = function(level, message)
       notifications[#notifications + 1] = "log:" .. level .. ":" .. message
     end,
@@ -183,8 +187,9 @@ local function check_panel(panel)
   local allowed = {
     text = true, muted = true, h1 = true, h2 = true, h3 = true, h4 = true,
     h5 = true, h6 = true, code = true, quote = true, list = true,
-    table = true, rule = true,
+    table = true, rule = true, image = true,
   }
+  local aligns = { left = true, center = true, right = true }
   for index, line in ipairs(panel.lines) do
     truthy(type(line.text) == "string", "line " .. index .. " text is not a string")
     if #line.text > 4096 then
@@ -195,6 +200,42 @@ local function check_panel(panel)
     end
     if line.indent ~= nil then
       truthy(line.indent >= 0 and line.indent <= 8, "line " .. index .. " indent out of range")
+    end
+    if line.tight ~= nil then
+      truthy(type(line.tight) == "boolean", "line " .. index .. " tight is not a boolean")
+    end
+    if line.break_before ~= nil then
+      truthy(type(line.break_before) == "boolean",
+        "line " .. index .. " break_before is not a boolean")
+    end
+    if line.image ~= nil then
+      truthy(type(line.image) == "string", "line " .. index .. " image is not a string")
+      truthy(#line.image > 0 and #line.image <= 4096, "line " .. index .. " image path is out of range")
+    end
+    if line.cells ~= nil then
+      truthy(type(line.cells) == "table", "line " .. index .. " cells is not a table")
+      truthy(#line.cells > 0 and #line.cells <= 32, "line " .. index .. " cell count out of range")
+      for cell_index, cell in ipairs(line.cells) do
+        truthy(type(cell) == "table", "line " .. index .. " cell is not a table")
+        truthy(type(cell.text) == "string", "line " .. index .. " cell text is not a string")
+        if #cell.text > 4096 then
+          fail("line " .. index .. " cell is longer than 4096 bytes")
+        end
+        truthy(aligns[cell.align or "left"], "line " .. index .. " cell has unknown align")
+        truthy(type(cell.header) == "boolean", "line " .. index .. " cell header is not a boolean")
+        truthy(type(cell.weight) == "number"
+          and cell.weight >= 1 and cell.weight <= 32,
+          "line " .. index .. " cell weight out of range")
+        if cell.spans then
+          truthy(#cell.spans <= 512, "line " .. index .. " cell has too many spans")
+          local parts = {}
+          for _, span in ipairs(cell.spans) do
+            truthy(type(span.text) == "string", "line " .. index .. " cell span text is not a string")
+            parts[#parts + 1] = span.text
+          end
+          eq(table.concat(parts), cell.text, "line " .. index .. " cell spans do not match text")
+        end
+      end
     end
     if line.command ~= nil then
       truthy(type(line.command) == "table", "line " .. index .. " command is not a table")
@@ -305,7 +346,7 @@ test("headings, setext headings and over-long ATX runs", function()
 end)
 
 test("inline emphasis, code, strike and links", function()
-  local panel = render("**bold** *italic* ***both*** `code` ~~gone~~ [label](https://e.com/a?b=1) and <https://e.com/x>\n")
+  local panel = render("**bold** *italic* ***both*** `code` ~~gone~~ [label](https://e.com/a?b=1) and <https://e.com/x>\n", { show_link_targets = true })
   local line = line_with(panel, "text")
   truthy(line, "paragraph missing")
   truthy(style_has(line, "bold", "bold"), "bold span missing")
@@ -319,19 +360,37 @@ test("inline emphasis, code, strike and links", function()
   eq(select(2, line.text:gsub("%(https://e.com/x%)", "")), 0, "autolink target duplicated")
 end)
 
-test("link targets can be hidden", function()
-  local panel = render("[label](https://e.com)\n", { show_link_targets = false })
-  local line = line_with(panel, "text")
-  eq(line.text, "label")
+test("link targets are hidden by default and can be shown", function()
+  local hidden = render("[label](https://e.com)\n")
+  local line = line_with(hidden, "text")
+  eq(line.text, "label", "VSCode/IDEA previews do not append link destinations")
   truthy(style_has(line, "link", "label"), "link style missing")
+  local shown = render("[label](https://e.com)\n", { show_link_targets = true })
+  contains(line_with(shown, "text").text, "label (https://e.com)")
 end)
 
-test("images become readable placeholders", function()
+test("standalone local images become image blocks", function()
   local panel = render("![alt text](pic.png)\n")
-  local line = line_with(panel, "text")
+  local image = line_with(panel, "image")
+  truthy(image, "standalone image block missing")
+  eq(image.text, "alt text", "image alt text")
+  eq(image.image, "pic.png", "image source")
+end)
+
+test("inline and remote images become readable placeholders", function()
+  local inline = render("An image: ![alt text](pic.png)\n")
+  local line = line_with(inline, "text")
   contains(line.text, "🖼 alt text")
-  contains(line.text, "pic.png")
-  truthy(style_has(line, "muted"), "image placeholder should be muted")
+  truthy(style_has(line, "muted"), "inline image placeholder should be muted")
+  local remote = render("![remote](https://example.com/logo.png)\n")
+  local remote_line = line_with(remote, "text")
+  truthy(remote_line, "remote image must stay inline")
+  contains(remote_line.text, "🖼 remote")
+  truthy(not line_with(remote, "image"), "remote images must not become local image blocks")
+  local shown = render("![alt text](pic.png)\n", { show_link_targets = true })
+  local shown_image = line_with(shown, "image")
+  truthy(shown_image, "image block missing with targets enabled")
+  eq(shown_image.text, "alt text", "image alt text is not the target")
 end)
 
 test("unordered, ordered and task lists", function()
@@ -350,6 +409,21 @@ test("block quotes nest and keep a depth", function()
   local second = line_with(panel, "quote", "nested")
   truthy(first and first.indent == 1, "first quote level missing")
   truthy(second and second.indent == 2, "nested quote level missing")
+  truthy(first.tight, "the first quote line must be tight for a continuous bar")
+  eq(second.tight, nil, "the last quote line keeps the block spacing")
+end)
+
+test("multi-paragraph quotes keep one continuous bar", function()
+  local panel = render("> first paragraph\n>\n> second paragraph\n\nAfter.\n")
+  local quote_lines = {}
+  for _, line in ipairs(panel.lines) do
+    if line.style == "quote" then
+      quote_lines[#quote_lines + 1] = line
+    end
+  end
+  eq(#quote_lines, 2, "quote paragraph count")
+  truthy(quote_lines[1].tight, "the first quote paragraph must be tight")
+  eq(quote_lines[2].tight, nil, "the last quote paragraph keeps its spacing")
 end)
 
 test("fenced code is highlighted and split by line", function()
@@ -381,38 +455,86 @@ test("indented code blocks are recognized", function()
   truthy(line_with(panel, "code", "indented code"), "indented code missing")
 end)
 
-test("tables align columns by display width including CJK", function()
+test("tables render as structured rows with alignment and header flags", function()
+  local panel = render("| Name | 值 | Note |\n|:-----|:--:|-----:|\n| a | 中文 | 1 |\n| longer cell | x | 22 |\n")
+  local rows = {}
+  for _, line in ipairs(panel.lines) do
+    if line.style == "table" and line.cells then
+      rows[#rows + 1] = line
+    end
+  end
+  eq(#rows, 3, "table row count")
+  eq(rows[1].cells[1].text, "Name", "header first cell")
+  truthy(rows[1].cells[1].header, "header cell flag")
+  truthy(not rows[2].cells[1].header, "body cell must not be a header")
+  eq(rows[1].cells[2].align, "center", "center alignment")
+  eq(rows[1].cells[3].align, "right", "right alignment")
+  eq(rows[2].cells[2].text, "中文", "CJK cell")
+  truthy(rows[2].cells[1].weight >= 1, "cell weight missing")
+  truthy(rows[2].cells[1].weight > rows[2].cells[2].weight,
+    "wider columns must get a larger weight")
+end)
+
+test("hosts without panel tables get the monospace fallback", function()
+  local features = luban.features
+  luban.features = nil
   local panel = render("| Name | 值 | Note |\n|:-----|:--:|-----:|\n| a | 中文 | 1 |\n| longer cell | x | 22 |\n")
   local widths = {}
   local header
   for _, line in ipairs(panel.lines) do
     if line.style == "table" then
+      truthy(line.cells == nil, "fallback rows must not carry cells")
       widths[#widths + 1] = require("text").display_width(line.text)
       if line.text:find("Name", 1, true) then
         header = line
       end
     end
   end
-  truthy(#widths >= 5, "table lines missing")
+  truthy(#widths >= 5, "fallback table lines missing")
   for _, width in ipairs(widths) do
-    eq(width, widths[1], "table line widths differ")
+    eq(width, widths[1], "fallback table line widths differ")
   end
-  truthy(header, "table header missing")
-  truthy(style_has(header, "bold", "Name"), "header cell should be bold")
-  truthy(line_with(panel, "table", "中文"), "CJK cell missing")
+  truthy(header, "fallback table header missing")
+  truthy(style_has(header, "bold", "Name"), "fallback header cell should be bold")
+  luban.features = features
 end)
 
-test("wide tables stay inside the panel width", function()
+test("wide table cells keep their full text", function()
   local wide = string.rep("a", 80)
   local panel = render("| left | right |\n|---|---|\n| " .. wide .. " | " .. wide .. " |\n")
-  local seen = 0
+  local found = false
   for _, line in ipairs(panel.lines) do
-    if line.style == "table" then
-      seen = seen + 1
-      truthy(require("text").display_width(line.text) <= 72, "table line is too wide")
+    if line.style == "table" and line.cells then
+      for _, cell in ipairs(line.cells) do
+        if cell.text == wide then
+          found = true
+        end
+      end
     end
   end
-  truthy(seen >= 4, "wide table lines missing")
+  truthy(found, "structured table cell was truncated")
+end)
+
+test("adjacent fenced blocks become separate code groups", function()
+  local panel = render("```lua\na\n```\n\n```js\nb\n```\n")
+  local groups = 0
+  local previous_code = false
+  local break_seen = false
+  for _, line in ipairs(panel.lines) do
+    if line.style == "code" then
+      if not previous_code or line.break_before then
+        groups = groups + 1
+      end
+      if line.break_before then
+        break_seen = true
+      end
+      previous_code = true
+    else
+      previous_code = false
+    end
+  end
+  eq(groups, 2, "each fenced block must be its own code group")
+  truthy(break_seen, "the second code group must carry break_before")
 end)
 
 test("frontmatter is hidden by default and rendered on request", function()
@@ -425,11 +547,15 @@ test("frontmatter is hidden by default and rendered on request", function()
   truthy(line_with(shown, "h1", "Body"), "body missing after shown frontmatter")
 end)
 
-test("raw HTML blocks are shown as muted text and inline tags are stripped", function()
-  local panel = render("<div class=\"x\">\nraw\n</div>\n\nA <span>tag</span> here.\n")
-  truthy(line_with(panel, "muted", "<div"), "HTML block missing")
-  local paragraph = line_with(panel, "text", "A tag here.")
-  truthy(paragraph, "inline HTML was not stripped")
+test("raw HTML blocks render visible text instead of tags", function()
+  local panel = render(
+    '<div class="x">\nraw <strong>text</strong>\n</div>\n\n<script>alert(1)</script>\n\n<p>Hello &amp; bye</p>\n\nA <span>tag</span> here.\n'
+  )
+  truthy(line_with(panel, "text", "raw text"), "HTML block text missing")
+  truthy(not line_with(panel, "text", "<div"), "HTML tags leaked into the preview")
+  truthy(not line_with(panel, "text", "alert"), "script bodies must stay hidden")
+  truthy(line_with(panel, "text", "Hello & bye"), "HTML entities were not decoded")
+  truthy(line_with(panel, "text", "A tag here."), "inline HTML was not stripped")
 end)
 
 test("hard breaks create separate lines; soft breaks join with spaces", function()
@@ -437,6 +563,22 @@ test("hard breaks create separate lines; soft breaks join with spaces", function
   local texts = line_texts(panel)
   eq(texts[1], "one", "hard break first line")
   eq(texts[2], "two three", "soft break should join with a space")
+  eq(panel.lines[1].tight, true, "the line before a hard break must stay tight")
+  eq(panel.lines[2].tight, nil, "the paragraph's last line keeps its spacing")
+end)
+
+test("fenced blocks keep their language and body separate from paragraphs", function()
+  local panel = render("before\n\n```lua\nprint('x')\n```\n\nafter\n")
+  local code
+  for _, line in ipairs(panel.lines) do
+    if line.style == "code" then
+      code = line
+    end
+  end
+  truthy(code, "code line missing")
+  eq(code.text, "print('x')", "code body")
+  eq(line_with(panel, "text", "before").tight, nil, "paragraph before")
+  eq(line_with(panel, "text", "after").tight, nil, "paragraph after")
 end)
 
 test("empty and unsupported documents explain themselves", function()
@@ -495,7 +637,15 @@ test("the rich fixture keeps every invariant", function()
   local panel = render(text)
   truthy(#panel.lines > 20, "fixture produced too few lines")
   truthy(line_with(panel, "h1"), "fixture h1 missing")
-  truthy(line_with(panel, "table"), "fixture table missing")
+  local table_row
+  for _, line in ipairs(panel.lines) do
+    if line.style == "table" and line.cells then
+      table_row = line
+      break
+    end
+  end
+  truthy(table_row, "fixture structured table missing")
+  truthy(table_row.cells[1].header, "fixture table header missing")
   truthy(line_with(panel, "code"), "fixture code missing")
   truthy(line_with(panel, "list"), "fixture list missing")
 end)
@@ -583,7 +733,7 @@ test("toggle_heading folds and unfolds a section and keeps sequence numbers", fu
   truthy(line_with(open_panel, "text", "para two"), "para two missing while open")
   truthy(line_with(open_panel, "text", "para deep"), "para deep missing while open")
   local h2_open = line_with(open_panel, "h2", "Two")
-  eq(h2_open.text, "▾ Two", "open heading should carry the unfold indicator")
+  eq(h2_open.text, "Two", "open headings stay bare like the VSCode/IDEA preview")
   eq(h2_open.command.args.index, 2, "heading seq while open")
 
   M.toggle_heading({}, { index = 2 })
@@ -606,7 +756,7 @@ test("toggle_heading folds and unfolds a section and keeps sequence numbers", fu
   check_panel(reopened)
   truthy(line_with(reopened, "text", "para two"), "para two must come back after unfold")
   local h2_reopened = line_with(reopened, "h2", "Two")
-  eq(h2_reopened.text, "▾ Two", "reopened heading shows the unfold indicator again")
+  eq(h2_reopened.text, "Two", "reopened heading drops the fold indicator again")
   current_doc = nil
 end)
 

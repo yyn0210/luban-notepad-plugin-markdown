@@ -67,7 +67,7 @@ end
 local function build_opts()
   local show_frontmatter = setting_bool("show_frontmatter", false)
   return {
-    show_link_targets = setting_bool("show_link_targets", true),
+    show_link_targets = setting_bool("show_link_targets", false),
     show_frontmatter = show_frontmatter,
     highlight = H.highlight,
   }
