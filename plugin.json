@@ -1,7 +1,7 @@
 {
   "id": "io.github.yyn0210.markdown-preview",
   "name": "Markdown Preview",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "api_version": 2,
   "main": "main.lua",
   "description": "VSCode-style rendered Markdown preview in a side panel: real GFM tables, task lists, quotes, syntax-highlighted code blocks, collapsible headings and click-to-source jumps.",
