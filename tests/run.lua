@@ -28,6 +28,18 @@ local function make_luban()
     features = {
       panel_tables = true,
       panel_tight_lines = true,
+      localized_text = true,
+    },
+    i18n = {
+      locale = function()
+        return "en"
+      end,
+      pick = function(value)
+        if type(value) == "table" then
+          return value.en or value["zh-CN"] or next(value)
+        end
+        return value
+      end,
     },
     log = function(level, message)
       notifications[#notifications + 1] = "log:" .. level .. ":" .. message
@@ -804,6 +816,17 @@ test("goto_source records set_cursor(line, 1) and falls back to the cursor's blo
   M.goto_source({})
   last = cursor_calls[#cursor_calls]
   eq(last.line, 1, "cursor above everything falls back to the first block")
+end)
+
+test("panel titles stay English on hosts without luban.i18n", function()
+  local original = luban.i18n
+  luban.i18n = nil
+  local panel = render("# Head\n")
+  truthy(
+    panel.title == "Markdown Preview" or panel.title:find("Preview", 1, true),
+    "title should fall back to English"
+  )
+  luban.i18n = original
 end)
 
 io.write(string.format("\n%d passed, %d failed\n", PASSED, FAILED))

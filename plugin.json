@@ -68,5 +68,40 @@
         "default": false
       }
     ]
+  },
+  "localizations": {
+    "zh-CN": {
+      "name": "Markdown 预览",
+      "description": "侧栏中的 VSCode 风格 Markdown 渲染预览：真实 GFM 表格、任务列表、引用、语法高亮代码块、可折叠标题和点击跳转源行。",
+      "commands": {
+        "markdown.preview": {
+          "label": "Markdown：预览",
+          "description": "打开或刷新 Markdown 渲染预览"
+        },
+        "markdown.toggle-heading": {
+          "label": "Markdown：折叠/展开标题",
+          "description": "折叠或展开标题下的章节（在预览面板中操作）"
+        },
+        "markdown.goto-source": {
+          "label": "Markdown：跳到源行",
+          "description": "把编辑光标移到预览段落对应的源文件行"
+        }
+      },
+      "panels": {
+        "markdown.preview.panel": {
+          "title": "Markdown 预览"
+        }
+      },
+      "settings": {
+        "show_link_targets": {
+          "label": "显示链接目标",
+          "description": "在链接文字后附加目标 URL（默认关闭，与 VSCode/IDEA 预览一致）。"
+        },
+        "show_frontmatter": {
+          "label": "显示 front matter",
+          "description": "渲染 YAML front matter，而不是隐藏它。"
+        }
+      }
+    }
   }
 }

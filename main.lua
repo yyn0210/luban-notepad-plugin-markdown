@@ -88,13 +88,25 @@ local function ensure_blocks(doc)
   return cache.blocks
 end
 
+-- Older hosts do not expose luban.i18n; they keep the English panel title.
+local function pick(english, chinese)
+  if luban.i18n and luban.i18n.pick then
+    return luban.i18n.pick({ en = english, ["zh-CN"] = chinese })
+  end
+  return english
+end
+
+local function panel_title()
+  return pick("Markdown Preview", "Markdown 预览")
+end
+
 local function document_title(doc)
   local path = doc.path
   if type(path) == "string" and path ~= "" then
     local name = path:match("([^/\\]+)$") or path
-    return name .. " — Preview"
+    return name .. " — " .. pick("Preview", "预览")
   end
-  return "Markdown Preview"
+  return panel_title()
 end
 
 -- Sequence number of the top-level heading at or above the cursor line, or
@@ -150,7 +162,7 @@ function M.render_preview(ctx)
   local doc = luban.document.get()
   if not doc then
     return {
-      title = "Markdown Preview",
+      title = panel_title(),
       lines = { { text = "Preview is not available for this document.", style = "muted" } },
     }
   end
